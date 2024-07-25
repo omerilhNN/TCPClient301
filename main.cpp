@@ -26,42 +26,35 @@ const int SERVER_PORT = 36;
 DWORD WINAPI SocketHandler(LPVOID lpParam) {
     SOCKET clientSocket = reinterpret_cast<SOCKET>(lpParam);
 
-    HANDLE hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
-    if (hEvent == NULL) {
-        cerr << "CreateEvent failed with error: " << GetLastError() << endl;
-        closesocket(clientSocket);
-        return 1;
-    }
-
     WSAEVENT wsaEvent = WSACreateEvent();
     if (WSAEventSelect(clientSocket, wsaEvent, FD_CONNECT | FD_CLOSE) == SOCKET_ERROR) {
         cerr << "WSAEventSelect failed with error: " << WSAGetLastError() << endl;
         closesocket(clientSocket);
-        CloseHandle(hEvent);
         return 1;
     }
-
-    HANDLE events[2] = { hEvent, wsaEvent };
+    cout << "Attempting to connect " << endl;
+    HANDLE events[1] = {wsaEvent };
 
     while (true) {
-        DWORD waitResult = WaitForMultipleObjectsEx(2, events, FALSE, INFINITE,TRUE);
-
+        DWORD waitResult = WSAWaitForMultipleEvents(1, events, FALSE, INFINITE,TRUE);
+        if (waitResult == WSA_WAIT_FAILED) {
+            cerr << "WSAWaitForMultipleEvents Failed: " << WSAGetLastError() << endl;
+        }
         if (waitResult == WAIT_OBJECT_0) {
             // Custom event triggered
             queueMutex.lock();
-            eventQueue.push( hEvent);
+            eventQueue.push( wsaEvent);
+            SetEvent(wsaEvent);
             queueMutex.unlock();
-            ResetEvent(hEvent);
         }
-        else if (waitResult == WAIT_OBJECT_0 + 1) {
+        /*else if (waitResult == WAIT_OBJECT_0 + 1) {
             queueMutex.lock();
             eventQueue.push(wsaEvent);
             queueMutex.unlock();
-        }
+        }*/
     }
 
     closesocket(clientSocket);
-    CloseHandle(hEvent);
     WSACloseEvent(wsaEvent);
     return 0;
 }
@@ -96,9 +89,7 @@ DWORD WINAPI Manager(LPVOID lpParam) {
                 int connResult= connect(clientSocket, (sockaddr*)&server_addr, sizeof(server_addr));
                 if (connResult == SOCKET_ERROR) {
                     cerr << "Can't connect to server! Quitting" << endl;
-                    closesocket(clientSocket);
-                    WSACleanup();
-                    exit(1);
+                    continue;
                 }
                 else {
                     cerr << "Connected to server succesfully " << endl;
@@ -106,7 +97,7 @@ DWORD WINAPI Manager(LPVOID lpParam) {
             }
 
             if (netEvents.lNetworkEvents & FD_CLOSE) {
-                cout << "Server disconnected" << endl;
+                cout << "Server shutdown" << endl;
                 closesocket(clientSocket);
             }
         }
@@ -121,11 +112,13 @@ DWORD WINAPI Manager(LPVOID lpParam) {
 int main() {
     WSADATA wsaData;
     SOCKET clientSocket;
+
     int wsa = WSAStartup(MAKEWORD(2, 2), &wsaData);
     if (wsa != 0) {
         cerr << "WSAStartup failed: " << wsa << endl;
         exit(1);
     }
+
     clientSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (clientSocket == INVALID_SOCKET) {
         cerr << "Can't create a socket! Quitting" << endl;
@@ -135,10 +128,10 @@ int main() {
     HANDLE hSocketHandlerThread = CreateThread(NULL, 0, SocketHandler, reinterpret_cast<LPVOID>(clientSocket), 0, NULL);
     HANDLE hManagerThread = CreateThread(NULL, 0, Manager, reinterpret_cast<LPVOID>(clientSocket), 0, NULL);
 
-    const char* testMessage = "Hello from the client!";
-    send(clientSocket, testMessage, strlen(testMessage), 0);
 
+    WaitForSingleObject(hSocketHandlerThread, INFINITE);
     WaitForSingleObject(hManagerThread, INFINITE);
+
     CloseHandle(hManagerThread);
     CloseHandle(hSocketHandlerThread);
 
