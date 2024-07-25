@@ -24,7 +24,7 @@ const int SERVER_PORT = 36;
 
 // SocketHandler thread function
 DWORD WINAPI SocketHandler(LPVOID lpParam) {
-    SOCKET clientSocket = reinterpret_cast<SOCKET>(lpParam);
+    SOCKET clientSocket = *reinterpret_cast<SOCKET*>(lpParam);
 
     WSAEVENT wsaEvent = WSACreateEvent();
     if (WSAEventSelect(clientSocket, wsaEvent, FD_CONNECT | FD_CLOSE) == SOCKET_ERROR) {
@@ -39,13 +39,15 @@ DWORD WINAPI SocketHandler(LPVOID lpParam) {
         DWORD waitResult = WSAWaitForMultipleEvents(1, events, FALSE, INFINITE,TRUE);
         if (waitResult == WSA_WAIT_FAILED) {
             cerr << "WSAWaitForMultipleEvents Failed: " << WSAGetLastError() << endl;
+            break;
         }
         if (waitResult == WAIT_OBJECT_0) {
             // Custom event triggered
             queueMutex.lock();
-            eventQueue.push( wsaEvent);
             SetEvent(wsaEvent);
+            eventQueue.push( wsaEvent);
             queueMutex.unlock();
+            break;
         }
         /*else if (waitResult == WAIT_OBJECT_0 + 1) {
             queueMutex.lock();
@@ -54,13 +56,11 @@ DWORD WINAPI SocketHandler(LPVOID lpParam) {
         }*/
     }
 
-    closesocket(clientSocket);
-    WSACloseEvent(wsaEvent);
     return 0;
 }
 
 DWORD WINAPI Manager(LPVOID lpParam) {
-    SOCKET clientSocket = reinterpret_cast<SOCKET>(lpParam);
+    SOCKET clientSocket = *reinterpret_cast<SOCKET*>(lpParam);
     sockaddr_in server_addr;
 
     server_addr.sin_family = AF_INET;
@@ -93,12 +93,14 @@ DWORD WINAPI Manager(LPVOID lpParam) {
                 }
                 else {
                     cerr << "Connected to server succesfully " << endl;
+                    break;
                 }
             }
 
             if (netEvents.lNetworkEvents & FD_CLOSE) {
                 cout << "Server shutdown" << endl;
                 closesocket(clientSocket);
+                break;
             }
         }
         else {
@@ -125,8 +127,8 @@ int main() {
         WSACleanup();
         exit(1);
     }
-    HANDLE hSocketHandlerThread = CreateThread(NULL, 0, SocketHandler, reinterpret_cast<LPVOID>(clientSocket), 0, NULL);
-    HANDLE hManagerThread = CreateThread(NULL, 0, Manager, reinterpret_cast<LPVOID>(clientSocket), 0, NULL);
+    HANDLE hSocketHandlerThread = CreateThread(NULL, 0, SocketHandler, reinterpret_cast<LPVOID>(&clientSocket), 0, NULL);
+    HANDLE hManagerThread = CreateThread(NULL, 0, Manager, reinterpret_cast<LPVOID>(&clientSocket), 0, NULL);
 
 
     WaitForSingleObject(hSocketHandlerThread, INFINITE);
