@@ -11,11 +11,6 @@
 
 using namespace std;
 
-//struct SocketEvent {
-//    SOCKET socket;
-//    HANDLE event;
-//};
-
 queue<HANDLE> eventQueue;
 mutex queueMutex;
 vector<thread> socketThreads;
@@ -33,43 +28,45 @@ DWORD WINAPI SocketHandler(LPVOID lpParam) {
         return 1;
     }
     cout << "Attempting to connect " << endl;
-    HANDLE events[1] = {wsaEvent };
+    HANDLE events[1] = { wsaEvent };
+
+    sockaddr_in server_addr;
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(SERVER_PORT);
+    if (inet_pton(AF_INET, SERVER_ADDRESS, &server_addr.sin_addr) <= 0) {
+        cout << "Invalid IP" << endl;
+        return 1;
+    }
+
+    if (connect(clientSocket, (sockaddr*)&server_addr, sizeof(server_addr)) == SOCKET_ERROR) {
+        if (WSAGetLastError() != WSAEWOULDBLOCK) {
+            cerr << "Connect failed with error: " << WSAGetLastError() << endl;
+            closesocket(clientSocket);
+            return 1;
+        }
+    }
 
     while (true) {
-        DWORD waitResult = WSAWaitForMultipleEvents(1, events, FALSE, INFINITE,TRUE);
+        DWORD waitResult = WSAWaitForMultipleEvents(1, events, FALSE, INFINITE, TRUE);
         if (waitResult == WSA_WAIT_FAILED) {
             cerr << "WSAWaitForMultipleEvents Failed: " << WSAGetLastError() << endl;
             break;
         }
         if (waitResult == WAIT_OBJECT_0) {
-            // Custom event triggered
             queueMutex.lock();
             SetEvent(wsaEvent);
-            eventQueue.push( wsaEvent);
+            eventQueue.push(wsaEvent);
             queueMutex.unlock();
             break;
         }
-        /*else if (waitResult == WAIT_OBJECT_0 + 1) {
-            queueMutex.lock();
-            eventQueue.push(wsaEvent);
-            queueMutex.unlock();
-        }*/
     }
 
     return 0;
 }
 
+// Manager thread function
 DWORD WINAPI Manager(LPVOID lpParam) {
     SOCKET clientSocket = *reinterpret_cast<SOCKET*>(lpParam);
-    sockaddr_in server_addr;
-
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(SERVER_PORT);
-
-    if (inet_pton(AF_INET, SERVER_ADDRESS, &server_addr.sin_addr) <= 0) {
-        cout << "Invalid IP" << endl;
-        return 1;
-    }
 
     while (true) {
         queueMutex.lock();
@@ -78,7 +75,6 @@ DWORD WINAPI Manager(LPVOID lpParam) {
             eventQueue.pop();
             queueMutex.unlock();
 
-            // Process the event based on the socket event
             WSANETWORKEVENTS netEvents;
             if (WSAEnumNetworkEvents(clientSocket, sockEvent, &netEvents) == SOCKET_ERROR) {
                 cerr << "WSAEnumNetworkEvents failed with error: " << WSAGetLastError() << endl;
@@ -86,15 +82,8 @@ DWORD WINAPI Manager(LPVOID lpParam) {
             }
 
             if (netEvents.lNetworkEvents & FD_CONNECT) {
-                int connResult= connect(clientSocket, (sockaddr*)&server_addr, sizeof(server_addr));
-                if (connResult == SOCKET_ERROR) {
-                    cerr << "Can't connect to server! Quitting" << endl;
-                    continue;
-                }
-                else {
-                    cerr << "Connected to server succesfully " << endl;
-                    break;
-                }
+                cout << "Connected to server successfully " << endl;
+                //TODO: Client Processes after connected to server successfully
             }
 
             if (netEvents.lNetworkEvents & FD_CLOSE) {
@@ -127,9 +116,9 @@ int main() {
         WSACleanup();
         exit(1);
     }
+
     HANDLE hSocketHandlerThread = CreateThread(NULL, 0, SocketHandler, reinterpret_cast<LPVOID>(&clientSocket), 0, NULL);
     HANDLE hManagerThread = CreateThread(NULL, 0, Manager, reinterpret_cast<LPVOID>(&clientSocket), 0, NULL);
-
 
     WaitForSingleObject(hSocketHandlerThread, INFINITE);
     WaitForSingleObject(hManagerThread, INFINITE);
